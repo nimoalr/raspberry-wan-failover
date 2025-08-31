@@ -24,10 +24,10 @@ COOLDOWN=60        # Minimum seconds between state switches
 
 # Firewall extras (generic)
 # Allow these source IPs to reach the listed TCP ports during failover (space-separated values).
-ALLOWED_IPS="192.168.20.20"
-ALLOWED_TCP_PORTS="1883"
+ALLOWED_IPS="192.168.20.20" # Edit this
+ALLOWED_TCP_PORTS="1883" # Edit this
 # Block these source IPs from reaching the internet during failover (space-separated IPs).
-BLOCKED_INTERNET_ACCESS_IPS="192.168.20.50 192.168.20.51"
+BLOCKED_INTERNET_ACCESS_IPS="192.168.20.50 192.168.20.51" # Edit this
 
 # NAT behavior
 NAT_ON_NORMAL="no"     # NAT LAN -> ETH_IF in normal mode (if Pi is gateway for LAN)
@@ -37,9 +37,9 @@ NAT_ON_FAILOVER="no"   # NAT LAN -> WLAN_IF in failover (gives LAN internet via 
 STATE_FILE="/var/run/wan-failover.state"
 
 # Health endpoint (for Uptime Kuma)
-# systemd-socket-activated tiny HTTP endpoint, no extra deps.
-# Bind 0.0.0.0 to expose on LAN + Tailscale; use 127.0.0.1 to restrict.
+# Bind 0.0.0.0 to expose on LAN + Tailscale; use 127.0.0.1 to restrict
 HEALTH_BIND="0.0.0.0"
 HEALTH_PORT=8080
-# Optionally bind only to a device (e.g., tailscale0) to restrict exposure
-HEALTH_BIND_DEVICE="tailscale0"
+
+# Optionally bind only to a device (e.g., tailscale0) to restrict exposure (uncomment to enable)
+#HEALTH_BIND_DEVICE="tailscale0"
