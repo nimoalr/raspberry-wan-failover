@@ -1,6 +1,6 @@
 # raspberry-wan-failover
 
-Turn a Raspberry Pi 5 running Raspbian into a remote location gateway powered by Tailscale subnet routing, simple firewall profiles, and WAN failover management with health-check endpoint.
+Turn a Raspberry Pi 5 into a remote location gateway powered by Tailscale subnet routing, simple firewall profiles, and WAN failover management with health-check endpoint.
 
 Allows me to be notified with Uptime Kuma if my remote primary WAN is down and now on failover WAN. 
 
@@ -47,7 +47,7 @@ What it does:
 4) Test
 
 - From a Tailscale client, ping a host in your LAN subnet.
-- Simulate failover: `sudo ip link set eth0 down`. The service should switch to wlan0, apply `fw_failover.sh`, and continue to allow Tailscale <-> LAN access. Restore with `sudo ip link set eth0 up`.
+- Simulate failover by taking down your primary WAN interface (e.g., `sudo ip link set eth0 down`). The service should switch to your failover WAN interface, apply `fw_failover.sh`, and continue to allow Tailscale <-> LAN access. Restore with `sudo ip link set eth0 up`.
 
 ## Uninstall
 
@@ -75,8 +75,11 @@ Removes services, helper scripts, sysctl entry, and config. Leaves your `/etc/ip
 	- `HEALTH_BIND` (default `0.0.0.0`)
 	- `HEALTH_PORT` (default `8080`)
 	- `HEALTH_BIND_DEVICE` (optional, e.g., `tailscale0` to restrict exposure to this single interface)
-- Paths: `/`, `/health`, `/healthz`, `/status`
+- Paths: `/`, `/health`, `/status`
 - Response example:
-	- Normal: `{"state":"up","status":"ok"}`
-	- Failover: `{"state":"down","status":"failover"}`
+	- Normal: `{"state":"up","status":"ok","primary_wan_status":"up","failover_wan_status":"down"}`
+	- Failover: `{"state":"down","status":"failover","primary_wan_status":"down","failover_wan_status":"up"}`
+- The health endpoint provides granular status for both WAN interfaces:
+	- `primary_wan_status`: connectivity status of your primary WAN interface (PRIMARY_WAN_IF)
+	- `failover_wan_status`: connectivity status of your failover WAN interface (FAILOVER_WAN_IF)
 - In Uptime Kuma, add an HTTP monitor to `http://<tailscale-ip>:8080/health`.

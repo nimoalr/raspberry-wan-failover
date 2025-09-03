@@ -33,7 +33,7 @@ validate_config() {
   # shellcheck disable=SC1090
   source "$CONF_SRC"
   missing=()
-  for v in ETH_IF WLAN_IF TAILS_IF ETH_GW WLAN_GW LAN_NET TAILSCALE_NET; do
+  for v in PRIMARY_WAN_IF FAILOVER_WAN_IF TAILS_IF PRIMARY_WAN_GW FAILOVER_WAN_GW LAN_NET TAILSCALE_NET; do
     if [[ -z "${!v-}" ]]; then missing+=("$v"); fi
   done
   if (( ${#missing[@]} > 0 )); then
@@ -66,11 +66,11 @@ grep -q "eth0table" /etc/iproute2/rt_tables || echo "100 eth0table" | tee -a /et
 grep -q "wlan0table" /etc/iproute2/rt_tables || echo "200 wlan0table" | tee -a /etc/iproute2/rt_tables >/dev/null
 
 # Add default routes to policy tables (idempotent)
-ip route add default via "$ETH_GW" dev "$ETH_IF" table eth0table 2>/dev/null || true
-ip route add default via "$WLAN_GW" dev "$WLAN_IF" table wlan0table 2>/dev/null || true
+ip route add default via "$PRIMARY_WAN_GW" dev "$PRIMARY_WAN_IF" table eth0table 2>/dev/null || true
+ip route add default via "$FAILOVER_WAN_GW" dev "$FAILOVER_WAN_IF" table wlan0table 2>/dev/null || true
 
-# Ensure main default uses ETH_IF initially
-ip route replace default via "$ETH_GW" dev "$ETH_IF" || true
+# Ensure main default uses PRIMARY_WAN_IF initially
+ip route replace default via "$PRIMARY_WAN_GW" dev "$PRIMARY_WAN_IF" || true
 
 # Advertise subnet via Tailscale (requires login)
 if command -v tailscale >/dev/null 2>&1; then
@@ -95,13 +95,13 @@ iptables -P FORWARD ACCEPT || true
 iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 
 # Allow Tailscale <-> LAN
-iptables -A FORWARD -i "$TAILS_IF" -o "$ETH_IF" -d "$LAN_NET" -j ACCEPT || true
-iptables -A FORWARD -i "$ETH_IF" -o "$TAILS_IF" -s "$LAN_NET" -j ACCEPT || true
+iptables -A FORWARD -i "$TAILS_IF" -o "$PRIMARY_WAN_IF" -d "$LAN_NET" -j ACCEPT || true
+iptables -A FORWARD -i "$PRIMARY_WAN_IF" -o "$TAILS_IF" -s "$LAN_NET" -j ACCEPT || true
 
 # NAT in normal mode (optional)
 if [[ "${NAT_ON_NORMAL:-yes}" == "yes" ]]; then
-  iptables -t nat -C POSTROUTING -s "$LAN_NET" -o "$ETH_IF" -j MASQUERADE 2>/dev/null || \
-    iptables -t nat -A POSTROUTING -s "$LAN_NET" -o "$ETH_IF" -j MASQUERADE
+  iptables -t nat -C POSTROUTING -s "$LAN_NET" -o "$PRIMARY_WAN_IF" -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s "$LAN_NET" -o "$PRIMARY_WAN_IF" -j MASQUERADE
 fi
 EOF
   chmod +x /usr/local/bin/fw_allow_normal.sh
@@ -123,8 +123,8 @@ iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT || true
 iptables -A FORWARD -i lo -j ACCEPT || true
 
 # Allow Tailscale <-> LAN
-iptables -A FORWARD -i "$TAILS_IF" -o "$ETH_IF" -d "$LAN_NET" -j ACCEPT || true
-iptables -A FORWARD -i "$ETH_IF" -o "$TAILS_IF" -s "$LAN_NET" -j ACCEPT || true
+iptables -A FORWARD -i "$TAILS_IF" -o "$PRIMARY_WAN_IF" -d "$LAN_NET" -j ACCEPT || true
+iptables -A FORWARD -i "$PRIMARY_WAN_IF" -o "$TAILS_IF" -s "$LAN_NET" -j ACCEPT || true
 
 # Backward compatibility for old variable names
 if [[ -z "${ALLOWED_IPS:-}" && -n "${ALLOWED_COORD_IP:-}" ]]; then
@@ -159,10 +159,10 @@ if [[ -n "${BLOCKED_INTERNET_ACCESS_IPS:-}" ]]; then
   done
 fi
 
-# NAT LAN -> WLAN_IF in failover (optional)
+# NAT LAN -> FAILOVER_WAN_IF in failover (optional)
 if [[ "${NAT_ON_FAILOVER:-yes}" == "yes" ]]; then
-  iptables -t nat -C POSTROUTING -s "$LAN_NET" -o "$WLAN_IF" -j MASQUERADE 2>/dev/null || \
-    iptables -t nat -A POSTROUTING -s "$LAN_NET" -o "$WLAN_IF" -j MASQUERADE
+  iptables -t nat -C POSTROUTING -s "$LAN_NET" -o "$FAILOVER_WAN_IF" -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s "$LAN_NET" -o "$FAILOVER_WAN_IF" -j MASQUERADE
 fi
 EOF
   chmod +x /usr/local/bin/fw_failover.sh
@@ -179,7 +179,7 @@ IFS=' ' read -r -a CHECK_ARRAY <<<"${CHECK_HOSTS:-1.1.1.1 8.8.8.8}"
 
 ping_check() {
   for h in "${CHECK_ARRAY[@]}"; do
-    if ping -I "$ETH_IF" -c "${PING_COUNT:-2}" -W "${PING_TIMEOUT:-2}" "$h" >/dev/null 2>&1; then
+    if ping -I "$PRIMARY_WAN_IF" -c "${PING_COUNT:-2}" -W "${PING_TIMEOUT:-2}" "$h" >/dev/null 2>&1; then
       return 0
     fi
   done
@@ -203,8 +203,8 @@ while true; do
       if [[ $ok -ge $checks ]]; then
         NOW=$(date +%s)
         if [[ $((NOW - LAST_SWITCH_TS)) -ge ${COOLDOWN:-60} ]]; then
-          log "ETH restored — switching default back to $ETH_IF ($ETH_GW)"
-          /sbin/ip route replace default via "$ETH_GW" dev "$ETH_IF" || true
+          log "Primary WAN restored — switching default back to $PRIMARY_WAN_IF ($PRIMARY_WAN_GW)"
+          /sbin/ip route replace default via "$PRIMARY_WAN_GW" dev "$PRIMARY_WAN_IF" || true
           /usr/local/bin/fw_allow_normal.sh || true
           CURRENT_STATE="up"
           echo "$CURRENT_STATE" >"$STATE_FILE_PATH"
@@ -224,8 +224,8 @@ while true; do
       if [[ $bad -ge $checks ]]; then
         NOW=$(date +%s)
         if [[ $((NOW - LAST_SWITCH_TS)) -ge ${COOLDOWN:-60} ]]; then
-          log "ETH failed — switching default to $WLAN_IF ($WLAN_GW)"
-          /sbin/ip route replace default via "$WLAN_GW" dev "$WLAN_IF" || true
+          log "Primary WAN failed — switching default to $FAILOVER_WAN_IF ($FAILOVER_WAN_GW)"
+          /sbin/ip route replace default via "$FAILOVER_WAN_GW" dev "$FAILOVER_WAN_IF" || true
           /usr/local/bin/fw_failover.sh || true
           CURRENT_STATE="down"
           echo "$CURRENT_STATE" >"$STATE_FILE_PATH"
@@ -246,8 +246,39 @@ set -euo pipefail
 # shellcheck disable=SC1091
 source /etc/raspberry-wan-failover.conf
 
+IFS=' ' read -r -a CHECK_ARRAY <<<"${CHECK_HOSTS:-1.1.1.1 8.8.8.8}"
+
+check_interface() {
+  local if="$1"
+  
+  # Check if interface exists and is up
+  if ! ip link show "$if" >/dev/null 2>&1; then
+    return 1
+  fi
+  
+  # Check if interface is up
+  if ! ip link show "$if" | grep -q "state UP"; then
+    return 1
+  fi
+  
+  # Check connectivity via ping
+  for h in "${CHECK_ARRAY[@]}"; do
+    if ping -I "$if" -c "${PING_COUNT:-2}" -W "${PING_TIMEOUT:-2}" "$h" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  
+  return 1
+}
+
 STATE_FILE_PATH="${STATE_FILE:-/var/run/wan-failover.state}"
 STATE_VALUE="$(cat "$STATE_FILE_PATH" 2>/dev/null || echo up)"
+
+primary_wan_status="down"
+if check_interface "$PRIMARY_WAN_IF"; then primary_wan_status="up"; fi
+
+failover_wan_status="down"  
+if check_interface "$FAILOVER_WAN_IF"; then failover_wan_status="up"; fi
 
 # Read the first request line (e.g., GET /health HTTP/1.1)
 read -r REQUEST_LINE || REQUEST_LINE=""
@@ -259,8 +290,8 @@ fi
 STATUS="ok"
 [[ "$STATE_VALUE" == "down" ]] && STATUS="failover"
 
-if [[ "$REQ_PATH" == "/" || "$REQ_PATH" == "/health" || "$REQ_PATH" == "/healthz" || "$REQ_PATH" == "/status" ]]; then
-  BODY="{\"state\":\"$STATE_VALUE\",\"status\":\"$STATUS\"}"
+if [[ "$REQ_PATH" == "/" || "$REQ_PATH" == "/health" || "$REQ_PATH" == "/status" ]]; then
+  BODY="{\"state\":\"$STATE_VALUE\",\"status\":\"$STATUS\",\"primary_wan_status\":\"$primary_wan_status\",\"failover_wan_status\":\"$failover_wan_status\"}"
   printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' "${#BODY}" "$BODY"
 else
   BODY='{"error":"not found"}'
